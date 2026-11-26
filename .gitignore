@@ -1,2 +1,8 @@
 /target
 /result
+
+# Tailor writes these Nix fragments on each alter. The flake does not use them.
+/nix/
+
+# direnv cache of the Nix dev shell
+/.direnv/

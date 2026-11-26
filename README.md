@@ -42,9 +42,21 @@ TRIM=path/to/other/trim BENCH_LABEL=other nix develop -c bench/run.sh
 
 The first run clones about 1.5 GB into `$XDG_CACHE_HOME/trim-bench`. Results go to `results/` in that folder, one TSV file per run. The script header lists all settings.
 
+## Install
+
+```sh
+cargo install --git https://github.com/aeskildsen/trim
+```
+
+trim is pure Rust, so this needs only a Rust toolchain. With Nix: `nix profile install github:aeskildsen/trim`. `trim --remotes --delete` also needs the `git` command.
+
 ## Build
 
 ```sh
 nix develop -c cargo test
 nix build        # result/bin/trim
 ```
+
+## License
+
+MIT
