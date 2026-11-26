@@ -15,8 +15,8 @@
 #
 # The history above X is real, so later commits can change the same lines
 # again. Each repository is measured with a split commit-graph, a single-file
-# commit-graph and no commit-graph, because libgit2 reads only the
-# single-file format.
+# commit-graph and no commit-graph, because git libraries differ in which
+# formats they read, and the graph can change the time a lot.
 #
 # Environment:
 #   TRIM          the trim binary to measure (default: a release build of

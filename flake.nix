@@ -19,11 +19,6 @@
           version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
           src = self;
           cargoLock.lockFile = ./Cargo.lock;
-          # By default, a hook of the Rust builder sets LIBGIT2_NO_VENDOR=1 and
-          # libgit2-sys then needs the libgit2 from nixpkgs. Turn off the hook,
-          # so the package uses the same bundled libgit2 as `cargo build`. The
-          # build then does not depend on the libgit2 version in nixpkgs.
-          dontCargoUseSystemLibs = true;
           # The integration tests make scratch repositories with the git CLI.
           nativeCheckInputs = [ pkgs.git ];
         };

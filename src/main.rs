@@ -6,7 +6,8 @@ mod detect;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use detect::{Detector, How};
-use git2::{BranchType, Oid, Repository};
+use gix::ObjectId;
+use gix::bstr::ByteSlice;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Write};
@@ -69,7 +70,6 @@ struct RepoResult {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    tune_libgit2();
 
     let mut repos = Vec::new();
     for path in &cli.paths {
@@ -129,18 +129,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// By default libgit2 does not cache a tree larger than 4 KiB. A large
-/// directory then is read from the pack again for each commit, which makes
-/// the tree diffs on a long history about 1.5 times slower.
-fn tune_libgit2() {
-    // SAFETY: these calls change global libgit2 settings. They occur before
-    // any other libgit2 call and before trim starts its threads.
-    unsafe {
-        let _ = git2::opts::set_cache_object_limit(git2::ObjectType::Tree, 1 << 20);
-        let _ = git2::opts::set_cache_max_size(1 << 30);
-    }
-}
-
 /// Adds `path` if it is a repository. If not, searches its subdirectories,
 /// down to `depth` levels. The search does not go into a repository, a
 /// hidden directory or a symbolic link.
@@ -171,7 +159,7 @@ fn find_repos(path: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 /// (`origin/feat`).
 struct Candidate {
     name: String,
-    tip: Oid,
+    tip: ObjectId,
     remote: bool,
 }
 
@@ -183,24 +171,31 @@ impl Candidate {
 }
 
 fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
-    let repo = Repository::open(path).context("cannot open repository")?;
+    let repo = gix::open(path).context("cannot open repository")?;
     let mut result = RepoResult::default();
 
     let mut candidates = Vec::new();
     let remote_prefix = format!("{REMOTE}/");
-    for branch in repo.branches(None)? {
-        let (branch, kind) = branch?;
-        let remote = kind == BranchType::Remote;
+    let refs = repo.references()?;
+    let local = refs.local_branches()?.map(|r| (r, false));
+    let remote = refs.remote_branches()?.map(|r| (r, true));
+    for (reference, remote) in local.chain(remote) {
         if remote && !cli.remotes {
             continue;
         }
-        // A symbolic ref such as origin/HEAD has no target.
-        if let (Some(name), Some(tip)) = (branch.name()?, branch.get().target())
-            && (!remote || name.starts_with(&remote_prefix))
-        {
+        let reference = reference?;
+        // A symbolic ref such as origin/HEAD has no object id. A name that is
+        // not UTF-8 cannot go into the output, so trim does not check it.
+        let Some(tip) = reference.try_id() else {
+            continue;
+        };
+        let Ok(name) = reference.name().shorten().to_str() else {
+            continue;
+        };
+        if !remote || name.starts_with(&remote_prefix) {
             candidates.push(Candidate {
                 name: name.to_owned(),
-                tip,
+                tip: tip.detach(),
                 remote,
             });
         }
@@ -225,12 +220,12 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
     let checked_out = checked_out_branches(&repo)?;
     candidates.retain(|c| !skip.contains(&c.name));
 
-    let mut detector = Detector::open(path)?;
+    let mut detector = Detector::new(repo.clone());
     let mut classified = Vec::with_capacity(candidates.len());
     for c in &candidates {
         let mut how = None;
         for base in &bases {
-            how = detector.classify(to_gix(c.tip), to_gix(base.oid))?;
+            how = detector.classify(c.tip, base.oid)?;
             if how.is_some() {
                 break;
             }
@@ -253,7 +248,8 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
                     how.as_str()
                 ));
             } else {
-                repo.find_branch(&c.name, BranchType::Local)?
+                // The delete fails if the branch moved after trim read it.
+                repo.find_reference(format!("refs/heads/{}", c.name).as_str())?
                     .delete()
                     .with_context(|| format!("cannot delete {}", c.name))?;
                 // The tip lets the user restore the branch: git branch <name> <tip>
@@ -266,14 +262,14 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
         }
         result.found.push(Found {
             repo: name.to_owned(),
-            time: repo.find_commit(c.tip)?.time().seconds(),
+            time: repo.find_commit(c.tip)?.time()?.seconds,
             branch: c.name,
             how,
         });
     }
 
     if !to_delete_on_remote.is_empty() {
-        let refs: Vec<(String, Oid)> = to_delete_on_remote
+        let refs: Vec<(String, ObjectId)> = to_delete_on_remote
             .iter()
             .map(|(b, tip, _)| (b.clone(), *tip))
             .collect();
@@ -313,7 +309,7 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
 /// Returns the result for each branch name.
 fn delete_on_remote(
     path: &Path,
-    branches: &[(String, Oid)],
+    branches: &[(String, ObjectId)],
 ) -> Result<HashMap<String, Result<(), String>>> {
     let mut cmd = Command::new("git");
     cmd.arg("-C")
@@ -363,7 +359,7 @@ fn delete_on_remote(
 
 struct Base {
     name: String,
-    oid: Oid,
+    oid: ObjectId,
     /// True for a local branch, false for a remote-tracking ref.
     local: bool,
 }
@@ -372,33 +368,37 @@ struct Base {
 /// default branch and `origin/<default>`. A branch counts as merged if one of
 /// them contains it, because after a merge on the forge the local default
 /// branch is often behind the remote.
-fn bases(repo: &Repository, explicit: Option<&str>) -> Result<Vec<Base>> {
-    let find = |name: &str, kind: BranchType| -> Result<Option<Base>> {
-        match repo.find_branch(name, kind) {
-            Ok(b) => Ok(Some(Base {
+fn bases(repo: &gix::Repository, explicit: Option<&str>) -> Result<Vec<Base>> {
+    let find = |name: &str, local: bool| -> Result<Option<Base>> {
+        let full = if local {
+            format!("refs/heads/{name}")
+        } else {
+            format!("refs/remotes/{name}")
+        };
+        match repo.try_find_reference(full.as_str())? {
+            Some(mut r) => Ok(Some(Base {
                 name: name.to_owned(),
-                oid: b.get().peel_to_commit()?.id(),
-                local: kind == BranchType::Local,
+                oid: r.peel_to_id()?.detach(),
+                local,
             })),
-            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
-            Err(e) => Err(e.into()),
+            None => Ok(None),
         }
     };
 
     if let Some(name) = explicit {
-        return match find(name, BranchType::Local)? {
+        return match find(name, true)? {
             Some(b) => Ok(vec![b]),
-            None => match find(name, BranchType::Remote)? {
+            None => match find(name, false)? {
                 Some(b) => Ok(vec![b]),
                 None => bail!("no branch {name}"),
             },
         };
     }
 
-    let default = default_branch(repo).context("cannot find the default branch; use --base")?;
+    let default = default_branch(repo)?.context("cannot find the default branch; use --base")?;
     let bases: Vec<Base> = [
-        find(&default, BranchType::Local)?,
-        find(&format!("{REMOTE}/{default}"), BranchType::Remote)?,
+        find(&default, true)?,
+        find(&format!("{REMOTE}/{default}"), false)?,
     ]
     .into_iter()
     .flatten()
@@ -412,11 +412,13 @@ fn bases(repo: &Repository, explicit: Option<&str>) -> Result<Vec<Base>> {
 /// If one base contains the other, keeps only the one that contains the
 /// other, because each check against a base is slow on a long history. This
 /// is the usual case: the local default branch is behind `origin/<default>`.
-fn drop_redundant_bases(repo: &Repository, mut bases: Vec<Base>) -> Result<Vec<Base>> {
+fn drop_redundant_bases(repo: &gix::Repository, mut bases: Vec<Base>) -> Result<Vec<Base>> {
     if let [a, b] = &bases[..] {
-        if a.oid == b.oid || repo.graph_descendant_of(a.oid, b.oid)? {
+        // x contains y if y is the merge base of the two.
+        let merge_base = repo.merge_base(a.oid, b.oid)?.map(|id| id.detach());
+        if merge_base == Some(b.oid) {
             bases.truncate(1);
-        } else if repo.graph_descendant_of(b.oid, a.oid)? {
+        } else if merge_base == Some(a.oid) {
             bases.remove(0);
         }
     }
@@ -425,37 +427,41 @@ fn drop_redundant_bases(repo: &Repository, mut bases: Vec<Base>) -> Result<Vec<B
 
 /// The branch that `origin/HEAD` points to, or else the first local branch
 /// of `main`, `master` and `trunk` that exists.
-fn default_branch(repo: &Repository) -> Option<String> {
+fn default_branch(repo: &gix::Repository) -> Result<Option<String>> {
     let prefix = format!("refs/remotes/{REMOTE}/");
-    if let Ok(head) = repo.find_reference(&format!("{prefix}HEAD"))
-        && let Ok(Some(target)) = head.symbolic_target()
-        && let Some(name) = target.strip_prefix(&prefix)
+    if let Some(head) = repo.try_find_reference(format!("{prefix}HEAD").as_str())?
+        && let gix::refs::TargetRef::Symbolic(target) = head.target()
+        && let Some(name) = target
+            .as_bstr()
+            .to_str()
+            .ok()
+            .and_then(|t| t.strip_prefix(&prefix))
     {
-        return Some(name.to_owned());
+        return Ok(Some(name.to_owned()));
     }
-    ["main", "master", "trunk"]
-        .into_iter()
-        .find(|n| repo.find_branch(n, BranchType::Local).is_ok())
-        .map(str::to_owned)
+    for name in ["main", "master", "trunk"] {
+        if repo
+            .try_find_reference(format!("refs/heads/{name}").as_str())?
+            .is_some()
+        {
+            return Ok(Some(name.to_owned()));
+        }
+    }
+    Ok(None)
 }
 
 /// Branches that HEAD of the main worktree or of a linked worktree points to.
-fn checked_out_branches(repo: &Repository) -> Result<HashSet<String>> {
+fn checked_out_branches(repo: &gix::Repository) -> Result<HashSet<String>> {
     let mut names = HashSet::new();
-    let mut add = |repo: &Repository| {
-        if let Ok(head) = repo.find_reference("HEAD")
-            && let Ok(Some(target)) = head.symbolic_target()
-            && let Some(name) = target.strip_prefix("refs/heads/")
+    for wt in repo.worktrees_including_main()? {
+        if let Some(head) = wt?.head_name()?
+            && let Some(name) = head
+                .as_bstr()
+                .to_str()
+                .ok()
+                .and_then(|n| n.strip_prefix("refs/heads/"))
         {
             names.insert(name.to_owned());
-        }
-    };
-    add(repo);
-    for wt in repo.worktrees()?.iter().flatten().flatten() {
-        if let Ok(wt) = repo.find_worktree(wt)
-            && let Ok(wt_repo) = Repository::open_from_worktree(&wt)
-        {
-            add(&wt_repo);
         }
     }
     Ok(names)
@@ -516,9 +522,4 @@ fn age(secs: i64) -> String {
     };
     let plural = if n == 1 { "" } else { "s" };
     format!("{n} {unit}{plural} ago")
-}
-
-/// git2 and gitoxide use different types for the same object id.
-fn to_gix(oid: Oid) -> gix::ObjectId {
-    gix::ObjectId::from_bytes_or_panic(oid.as_bytes())
 }

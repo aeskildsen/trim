@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.105"
 clap = { version = "4.6.10", features = ["derive"] }
-git2 = { version = "0.21.0", default-features = false, features = ["vendored-libgit2"] }
 gix = { version = "0.91.0", default-features = false, features = ["sha1", "revision", "blob-diff", "max-performance"] }
 rayon = "1.12.0"
 

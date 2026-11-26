@@ -26,7 +26,6 @@ use gix::diff::tree::{Recorder, State, recorder::Change};
 use gix::objs::TreeRefIter;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::Path;
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,18 +78,17 @@ pub struct Detector {
 }
 
 impl Detector {
-    pub fn open(path: &Path) -> Result<Self> {
-        let mut repo = gix::open(path)?;
+    pub fn new(mut repo: gix::Repository) -> Self {
         // A cache for commits and trees helps the merge-base search and the
         // many tree diffs. The gitoxide documentation recommends one for
         // repeated merge-base calls.
         repo.object_cache_size_if_unset(64 * 1024 * 1024);
-        Ok(Self {
+        Self {
             repo,
             state: State::default(),
             patch_ids: HashMap::new(),
             paths: HashMap::new(),
-        })
+        }
     }
 
     /// Returns how `tip` got into `base`, or `None` if its change is not there.

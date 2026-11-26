@@ -28,7 +28,7 @@ A branch can be missed (for example, when a conflict fix changed the squash comm
 
 ## Speed
 
-trim uses libgit2. libgit2 1.9 cannot read a split commit-graph (`objects/info/commit-graphs/`), and its tree diffs are slower than git's. On a long history with old branches, such as a clone of a large upstream project, one run can take some seconds. A repository with recent branches takes milliseconds.
+trim uses gitoxide (`gix`), in pure Rust. It checks repositories in parallel. The time for one repository grows with the number of commits on the default branch since the oldest branch split off. With a commit-graph (git writes one during maintenance), a test branch 10,000 commits deep in Home Assistant core (126,000 commits) takes about 3.5 s; without one, about 21 s. A repository with recent branches takes milliseconds.
 
 ## Benchmark
 
