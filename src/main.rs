@@ -225,12 +225,12 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
     let checked_out = checked_out_branches(&repo)?;
     candidates.retain(|c| !skip.contains(&c.name));
 
-    let mut detector = Detector::new(Repository::open(path)?);
+    let mut detector = Detector::open(path)?;
     let mut classified = Vec::with_capacity(candidates.len());
     for c in &candidates {
         let mut how = None;
         for base in &bases {
-            how = detector.classify(c.tip, base.oid)?;
+            how = detector.classify(to_gix(c.tip), to_gix(base.oid))?;
             if how.is_some() {
                 break;
             }
@@ -516,4 +516,9 @@ fn age(secs: i64) -> String {
     };
     let plural = if n == 1 { "" } else { "s" };
     format!("{n} {unit}{plural} ago")
+}
+
+/// git2 and gitoxide use different types for the same object id.
+fn to_gix(oid: Oid) -> gix::ObjectId {
+    gix::ObjectId::from_bytes_or_panic(oid.as_bytes())
 }
