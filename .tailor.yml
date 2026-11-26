@@ -221,7 +221,7 @@ swatches:
     alteration: first-fit
 
   - path: CODE_OF_CONDUCT.md
-    alteration: first-fit
+    alteration: never
 
   - path: CONTRIBUTING.md
     alteration: first-fit
@@ -273,9 +273,3 @@ swatches:
 
   - path: .tailor.yml
     alteration: always
-
-  - path: ruff.toml
-    alteration: first-fit
-
-  - path: pyrightconfig.json
-    alteration: first-fit
