@@ -38,6 +38,8 @@
             rustfmt
             rust-analyzer
             git
+            # bench/run.sh
+            hyperfine
           ];
         };
       });

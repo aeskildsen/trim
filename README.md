@@ -30,6 +30,18 @@ A branch can be missed (for example, when a conflict fix changed the squash comm
 
 trim uses libgit2. libgit2 1.9 cannot read a split commit-graph (`objects/info/commit-graphs/`), and its tree diffs are slower than git's. On a long history with old branches, such as a clone of a large upstream project, one run can take some seconds. A repository with recent branches takes milliseconds.
 
+## Benchmark
+
+`bench/run.sh` checks correctness and speed on pinned public repositories (`bench/repos.tsv`: ripgrep, the Home Assistant frontend and core, SuperCollider). In a clone of each, it makes test branches from real commits at depths 10, 100, 1000 and 10000 below the tip: the commit itself (`merged`), its change as a new commit (`rebased`), its change in two commits (`squashed`), and its change plus one line (must not be found). It measures each repository with a split commit-graph, a single-file commit-graph and none.
+
+```sh
+nix develop -c bench/run.sh                  # all repositories
+nix develop -c bench/run.sh ripgrep          # one repository
+TRIM=path/to/other/trim BENCH_LABEL=other nix develop -c bench/run.sh
+```
+
+The first run clones about 1.5 GB into `$XDG_CACHE_HOME/trim-bench`. Results go to `results/` in that folder, one TSV file per run. The script header lists all settings.
+
 ## Build
 
 ```sh

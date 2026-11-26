@@ -1,0 +1,5 @@
+# name	url	branch	pinned commit
+ripgrep	https://github.com/BurntSushi/ripgrep.git	master	3e85c6c148fdce38a99ceeb9d2780dc7b03b4a4f
+ha-frontend	https://github.com/home-assistant/frontend.git	dev	25307e427debcda45422bc1a550743918f388d26
+supercollider	https://github.com/supercollider/supercollider.git	develop	ef5771bce3d1c9c780cafd58cf032ec4a3f36d10
+ha-core	https://github.com/home-assistant/core.git	dev	b22366b8a3bc17c912dfb23a342ba8bb32cbb799
