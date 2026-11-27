@@ -17,10 +17,12 @@ Deleted redesign in ~/src/site (squashed, was 3f9c2a1b7e)
 ## Install
 
 ```sh
-cargo install --git https://github.com/aeskildsen/trim
+cargo install --locked --git https://github.com/aeskildsen/trim
 ```
 
-trim is pure Rust. You need only a Rust toolchain.
+trim is pure Rust. You need only a Rust toolchain, version 1.95 or later.
+The `--locked` flag makes Cargo use the dependency versions in `Cargo.lock`,
+which are the versions that the tests use.
 
 With Nix, use this command:
 
