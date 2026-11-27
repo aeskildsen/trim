@@ -314,3 +314,76 @@ fn searches_directories_for_repositories() {
     let out = trim(root.path(), &["--depth", "1"]);
     assert_eq!(String::from_utf8(out.stdout).unwrap().lines().count(), 1);
 }
+
+/// stdout of trim with the layout for a person, without colour codes.
+fn for_person(dir: &Path, args: &[&str]) -> (String, String) {
+    let mut args = args.to_vec();
+    args.extend(["--color", "always"]);
+    let out = trim(dir, &args);
+    let strip = |b: &[u8]| {
+        let s = String::from_utf8_lossy(b).into_owned();
+        let mut plain = String::new();
+        let mut in_code = false;
+        for c in s.chars() {
+            match (in_code, c) {
+                (false, '\x1b') => in_code = true,
+                (true, 'm') => in_code = false,
+                (false, c) => plain.push(c),
+                _ => {}
+            }
+        }
+        plain
+    };
+    (strip(&out.stdout), strip(&out.stderr))
+}
+
+#[test]
+fn groups_branches_by_repository() {
+    let repo = new_repo();
+    let d = repo.path();
+    git(d, &["branch", "done"]);
+    commit(d, "more.txt", "more\n", "more");
+
+    let out = trim(d, &["--color", "always"]);
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let name = d.file_name().unwrap().to_str().unwrap();
+    assert!(
+        stdout.starts_with(&format!("\x1b[1m{name}\x1b[0m  ")),
+        "{stdout}"
+    );
+
+    let (stdout, _) = for_person(d, &[]);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(lines[0].starts_with(&format!("{name}  ")), "{stdout}");
+    assert!(lines[1].starts_with("  done  merged  "), "{stdout}");
+    assert_eq!(lines[2], "");
+    assert_eq!(lines[3], "1 stale branch. Run with --delete to remove it.");
+}
+
+#[test]
+fn says_when_nothing_is_stale() {
+    let repo = new_repo();
+    let (stdout, _) = for_person(repo.path(), &[]);
+    assert_eq!(stdout, "No stale branches in 1 repository.\n");
+}
+
+#[test]
+fn delete_shows_kept_branch_in_group() {
+    let repo = new_repo();
+    let d = repo.path();
+    git(d, &["branch", "done"]);
+    git(d, &["checkout", "-q", "-b", "current"]);
+
+    let (stdout, stderr) = for_person(d, &["--delete"]);
+    assert!(stderr.is_empty(), "{stderr}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        lines[1].starts_with("  deleted  done     merged  was "),
+        "{stdout}"
+    );
+    assert!(
+        lines[2].starts_with("  kept     current  merged  checked out"),
+        "{stdout}"
+    );
+    assert_eq!(lines[4], "Deleted 1 branch. Kept 1 checked-out branch.");
+}
