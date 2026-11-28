@@ -385,5 +385,216 @@ fn delete_shows_kept_branch_in_group() {
         lines[2].starts_with("  kept     current  merged  checked out"),
         "{stdout}"
     );
-    assert_eq!(lines[4], "Deleted 1 branch. Kept 1 checked-out branch.");
+    assert_eq!(
+        lines[4],
+        "Deleted 1 branch. Kept 1 checked-out branch. \
+         Run with --switch to switch away and delete it."
+    );
+}
+
+#[test]
+fn delete_hint_skips_linked_worktree() {
+    let repo = new_repo();
+    let d = repo.path();
+    git(d, &["branch", "done"]);
+    let wt = TempDir::new().unwrap();
+    let wt_path = wt.path().join("wt");
+    git(
+        d,
+        &["worktree", "add", "-q", wt_path.to_str().unwrap(), "done"],
+    );
+
+    let (stdout, _) = for_person(d, &["--delete"]);
+    let last = stdout.lines().last().unwrap();
+    assert_eq!(
+        last, "Deleted 0 branches. Kept 1 checked-out branch.",
+        "{stdout}"
+    );
+}
+
+#[test]
+fn switch_refused_has_no_hint() {
+    let repo = on_squashed_feature();
+    std::fs::write(repo.path().join("a.txt"), "edited\n").unwrap();
+    let (stdout, _) = for_person(repo.path(), &["--delete", "--switch"]);
+    let last = stdout.lines().last().unwrap();
+    assert_eq!(
+        last, "Deleted 0 branches. Kept 1 checked-out branch.",
+        "{stdout}"
+    );
+}
+
+/// A repository where `feat` is squash-merged into main and checked out.
+fn on_squashed_feature() -> TempDir {
+    let repo = new_repo();
+    let d = repo.path();
+    diverged_feature(d);
+    git(d, &["merge", "-q", "--squash", "feat"]);
+    git(d, &["commit", "-q", "-m", "squashed feat"]);
+    git(d, &["checkout", "-q", "feat"]);
+    repo
+}
+
+fn current_branch(dir: &Path) -> String {
+    git(dir, &["branch", "--show-current"]).trim().to_owned()
+}
+
+#[test]
+fn switch_needs_delete() {
+    let repo = new_repo();
+    let out = trim(repo.path(), &["--switch"]);
+    assert!(!out.status.success());
+}
+
+#[test]
+fn switch_moves_to_base_and_deletes() {
+    let repo = on_squashed_feature();
+    let d = repo.path();
+
+    let out = trim(d, &["--delete", "--switch"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(lines[0].starts_with("Switched to main in "), "{stdout}");
+    assert!(lines[1].starts_with("Deleted feat in "), "{stdout}");
+    assert_eq!(current_branch(d), "main");
+    assert!(git(d, &["branch", "--list", "feat"]).is_empty());
+}
+
+#[test]
+fn switch_uses_explicit_base() {
+    let repo = new_repo();
+    let d = repo.path();
+    git(d, &["branch", "develop"]);
+    git(d, &["checkout", "-q", "-b", "done"]);
+
+    let out = trim(d, &["--delete", "--switch", "--base", "develop"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(current_branch(d), "develop");
+    assert!(git(d, &["branch", "--list", "done"]).is_empty());
+}
+
+#[test]
+fn switch_refuses_uncommitted_change() {
+    let repo = on_squashed_feature();
+    let d = repo.path();
+    std::fs::write(d.join("a.txt"), "edited\n").unwrap();
+
+    let out = trim(d, &["--delete", "--switch"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("not switched: changes are not committed"),
+        "{stderr}"
+    );
+    assert_eq!(current_branch(d), "feat");
+    assert_eq!(
+        std::fs::read_to_string(d.join("a.txt")).unwrap(),
+        "edited\n"
+    );
+}
+
+#[test]
+fn switch_refuses_staged_change() {
+    let repo = on_squashed_feature();
+    let d = repo.path();
+    std::fs::write(d.join("new.txt"), "new\n").unwrap();
+    git(d, &["add", "new.txt"]);
+
+    let out = trim(d, &["--delete", "--switch"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("changes are not committed"));
+    assert_eq!(current_branch(d), "feat");
+}
+
+#[test]
+fn switch_ignores_untracked_file() {
+    let repo = on_squashed_feature();
+    let d = repo.path();
+    std::fs::write(d.join("notes.txt"), "mine\n").unwrap();
+
+    let out = trim(d, &["--delete", "--switch"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(current_branch(d), "main");
+    assert_eq!(
+        std::fs::read_to_string(d.join("notes.txt")).unwrap(),
+        "mine\n"
+    );
+}
+
+#[test]
+fn switch_refuses_operation_in_progress() {
+    let repo = on_squashed_feature();
+    let d = repo.path();
+    git(d, &["bisect", "start"]);
+
+    let out = trim(d, &["--delete", "--switch"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("a bisect is in progress"), "{stderr}");
+    assert_eq!(current_branch(d), "feat");
+}
+
+#[test]
+fn switch_refuses_remote_only_base() {
+    let (_upstream, clone) = squashed_on_remote();
+    let cl = clone.path();
+    git(cl, &["checkout", "-q", "feat"]);
+    git(cl, &["branch", "-q", "-D", "main"]);
+
+    let out = trim(cl, &["--delete", "--switch"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("the base branch is not a local branch"),
+        "{stderr}"
+    );
+    assert_eq!(current_branch(cl), "feat");
+}
+
+#[test]
+fn switch_leaves_linked_worktree() {
+    let repo = new_repo();
+    let d = repo.path();
+    git(d, &["branch", "done"]);
+    let wt = TempDir::new().unwrap();
+    let wt_path = wt.path().join("wt");
+    git(
+        d,
+        &["worktree", "add", "-q", wt_path.to_str().unwrap(), "done"],
+    );
+
+    let out = trim(d, &["--delete", "--switch"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("done is merged, but it is checked out; not deleted\n"),
+        "{stderr}"
+    );
+    assert_eq!(current_branch(&wt_path), "done");
+}
+
+#[test]
+fn switch_shows_in_group() {
+    let repo = on_squashed_feature();
+    let (stdout, stderr) = for_person(repo.path(), &["--delete", "--switch"]);
+    assert!(stderr.is_empty(), "{stderr}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines[1], "  switched to main", "{stdout}");
+    assert!(
+        lines[2].starts_with("  deleted  feat  squashed  was "),
+        "{stdout}"
+    );
 }

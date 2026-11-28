@@ -47,6 +47,12 @@ struct Cli {
     #[arg(short, long)]
     delete: bool,
 
+    /// With --delete: if the branch of the worktree at PATH is stale, switch
+    /// it to the base branch first, then delete the stale branch. trim does
+    /// not switch a worktree with changes that are not committed.
+    #[arg(short, long, requires = "delete")]
+    switch: bool,
+
     /// Also check the branches of the remote origin, from the last fetch.
     /// With --delete, delete them on the remote. A remote branch that changed
     /// after the last fetch stays.
@@ -78,12 +84,23 @@ struct Deleted {
     tip: String,
 }
 
+struct Kept {
+    found: Found,
+    /// Why `--switch` did not switch away from the branch.
+    why: Option<String>,
+    /// True if the branch is checked out in the worktree at the path, so
+    /// that `--switch` can switch away from it.
+    here: bool,
+}
+
 #[derive(Default)]
 struct RepoResult {
     found: Vec<Found>,
     deleted: Vec<Deleted>,
     /// Stale branches that stay because they are checked out.
-    kept: Vec<Found>,
+    kept: Vec<Kept>,
+    /// The branch that `--switch` changed the worktree to.
+    switched: Option<String>,
     /// Lines for stderr.
     errors: Vec<String>,
     failed: bool,
@@ -135,12 +152,16 @@ fn main() -> ExitCode {
         }
         // The output for a person shows these in the group of the repository.
         if !for_person {
-            for f in &r.kept {
+            for k in &r.kept {
+                let why = k
+                    .why
+                    .as_ref()
+                    .map_or_else(String::new, |w| format!("; not switched: {w}"));
                 eprintln!(
-                    "trim: {}: {} is {}, but it is checked out; not deleted",
+                    "trim: {}: {} is {}, but it is checked out; not deleted{why}",
                     path.display(),
-                    f.branch,
-                    f.how.as_str()
+                    k.found.branch,
+                    k.found.how.as_str()
                 );
             }
         }
@@ -156,6 +177,9 @@ fn main() -> ExitCode {
         (true, true) => output::deleted(&mut out, &painter, &results),
         (false, false) => print_tsv(&mut out, &results, now),
         (false, true) => results.iter().try_for_each(|(path, r)| {
+            if let Some(to) = &r.switched {
+                writeln!(out, "Switched to {to} in {}", path.display())?;
+            }
             r.deleted.iter().try_for_each(|d| {
                 writeln!(
                     out,
@@ -261,6 +285,8 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
     candidates.sort_by(|a, b| a.name.cmp(&b.name));
 
     let bases = bases(&repo, cli.base.as_deref())?;
+    // `--switch` changes to a local base only. It does not make a branch.
+    let switch_to = bases.iter().find(|b| b.local).map(|b| b.name.clone());
     // Do not report a base, or the remote copy of a local base.
     let skip: HashSet<String> = bases
         .iter()
@@ -271,7 +297,8 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
         .flatten()
         .collect();
     let bases = drop_redundant_bases(&repo, bases)?;
-    let checked_out = checked_out_branches(&repo)?;
+    let mut checked_out = checked_out_branches(&repo)?;
+    let head = head_branch(&repo)?;
     candidates.retain(|c| !skip.contains(&c.name));
 
     let mut detector = Detector::new(repo.clone());
@@ -287,6 +314,25 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
         classified.push(how);
     }
 
+    // If the branch of this worktree is stale, switch away from it before
+    // the deletes, so that it can go with the other stale branches.
+    let mut switch_refused = None;
+    if cli.switch
+        && let Some(head) = &head
+        && candidates
+            .iter()
+            .zip(&classified)
+            .any(|(c, how)| !c.remote && &c.name == head && how.is_some())
+    {
+        match switch_away(&repo, path, switch_to.as_deref()) {
+            Ok(to) => {
+                checked_out.remove(head);
+                result.switched = Some(to);
+            }
+            Err(why) => switch_refused = Some(why),
+        }
+    }
+
     let mut to_delete_on_remote = Vec::new();
     for (c, how) in candidates.into_iter().zip(classified) {
         let Some(how) = how else { continue };
@@ -300,7 +346,9 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
         } else if c.remote {
             to_delete_on_remote.push((c.remote_name().to_owned(), c.tip, found));
         } else if checked_out.contains(&c.name) {
-            result.kept.push(found);
+            let here = head.as_ref() == Some(&c.name);
+            let why = if here { switch_refused.clone() } else { None };
+            result.kept.push(Kept { found, why, here });
         } else {
             // The delete fails if the branch moved after trim read it.
             repo.find_reference(format!("refs/heads/{}", c.name).as_str())?
@@ -497,6 +545,64 @@ fn default_branch(repo: &gix::Repository) -> Result<Option<String>> {
         }
     }
     Ok(None)
+}
+
+/// The branch that HEAD of the worktree at the path points to, or nothing
+/// for a detached HEAD.
+fn head_branch(repo: &gix::Repository) -> Result<Option<String>> {
+    Ok(repo.head_name()?.and_then(|n| {
+        n.as_bstr()
+            .to_str()
+            .ok()
+            .and_then(|n| n.strip_prefix("refs/heads/"))
+            .map(str::to_owned)
+    }))
+}
+
+/// Switches the worktree at `path` to the branch `to`. Returns the branch,
+/// or the reason why trim did not switch.
+///
+/// trim does not switch if a change is not committed, because `git switch`
+/// moves such a change to the new branch without a message. Untracked files
+/// do not stop the switch: `git switch` stops by itself if the switch would
+/// overwrite one. The git CLI does the switch, so the checks and the hooks
+/// of git apply.
+fn switch_away(
+    repo: &gix::Repository,
+    path: &Path,
+    to: Option<&str>,
+) -> std::result::Result<String, String> {
+    let to = to.ok_or("the base branch is not a local branch")?;
+    if let Some(state) = repo.state() {
+        use gix::state::InProgress::*;
+        let what = match state {
+            ApplyMailbox | ApplyMailboxRebase => "git am",
+            Bisect => "a bisect",
+            CherryPick | CherryPickSequence => "a cherry-pick",
+            Merge => "a merge",
+            Rebase | RebaseInteractive => "a rebase",
+            Revert | RevertSequence => "a revert",
+        };
+        return Err(format!("{what} is in progress"));
+    }
+    let git = |args: &[&str]| -> std::result::Result<String, String> {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .output()
+            .map_err(|e| format!("cannot run git: {e}"))?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+        }
+    };
+    if !git(&["status", "--porcelain", "--untracked-files=no"])?.is_empty() {
+        return Err("changes are not committed".to_owned());
+    }
+    git(&["switch", "--quiet", to])?;
+    Ok(to.to_owned())
 }
 
 /// Branches that HEAD of the main worktree or of a linked worktree points to.
