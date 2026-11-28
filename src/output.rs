@@ -140,6 +140,8 @@ pub fn deleted(
 ) -> io::Result<()> {
     let mut deleted = 0;
     let mut kept = 0;
+    // Kept branches that a run with `--switch` can delete.
+    let mut switchable = 0;
     let mut repos_with_deleted = 0;
     for (path, r) in results
         .iter()
@@ -184,6 +186,7 @@ pub fn deleted(
         writeln!(out)?;
         deleted += r.deleted.len();
         kept += r.kept.len();
+        switchable += r.kept.iter().filter(|k| k.here && k.why.is_none()).count();
         repos_with_deleted += usize::from(!r.deleted.is_empty());
     }
 
@@ -202,6 +205,13 @@ pub fn deleted(
             out,
             " Kept {}.",
             plural(kept, "checked-out branch", "checked-out branches")
+        )?;
+    }
+    if switchable > 0 {
+        write!(
+            out,
+            " Run with --switch to switch away and delete {}.",
+            if switchable == 1 { "it" } else { "them" }
         )?;
     }
     writeln!(out)

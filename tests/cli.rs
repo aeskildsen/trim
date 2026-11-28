@@ -385,7 +385,43 @@ fn delete_shows_kept_branch_in_group() {
         lines[2].starts_with("  kept     current  merged  checked out"),
         "{stdout}"
     );
-    assert_eq!(lines[4], "Deleted 1 branch. Kept 1 checked-out branch.");
+    assert_eq!(
+        lines[4],
+        "Deleted 1 branch. Kept 1 checked-out branch. \
+         Run with --switch to switch away and delete it."
+    );
+}
+
+#[test]
+fn delete_hint_skips_linked_worktree() {
+    let repo = new_repo();
+    let d = repo.path();
+    git(d, &["branch", "done"]);
+    let wt = TempDir::new().unwrap();
+    let wt_path = wt.path().join("wt");
+    git(
+        d,
+        &["worktree", "add", "-q", wt_path.to_str().unwrap(), "done"],
+    );
+
+    let (stdout, _) = for_person(d, &["--delete"]);
+    let last = stdout.lines().last().unwrap();
+    assert_eq!(
+        last, "Deleted 0 branches. Kept 1 checked-out branch.",
+        "{stdout}"
+    );
+}
+
+#[test]
+fn switch_refused_has_no_hint() {
+    let repo = on_squashed_feature();
+    std::fs::write(repo.path().join("a.txt"), "edited\n").unwrap();
+    let (stdout, _) = for_person(repo.path(), &["--delete", "--switch"]);
+    let last = stdout.lines().last().unwrap();
+    assert_eq!(
+        last, "Deleted 0 branches. Kept 1 checked-out branch.",
+        "{stdout}"
+    );
 }
 
 /// A repository where `feat` is squash-merged into main and checked out.

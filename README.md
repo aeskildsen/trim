@@ -76,7 +76,7 @@ A branch is stale if the local default branch contains its changes. It is also s
 
 ### Output
 
-On a terminal, trim shows the branches in groups by repository. Each group has a heading with the name and the path of the repository. A line at the end gives the totals. With `--delete`, a group also shows each checked-out branch that trim did not delete.
+On a terminal, trim shows the branches in groups by repository. Each group has a heading with the name and the path of the repository. A line at the end gives the totals. With `--delete`, a group also shows each checked-out branch that trim did not delete. If `--switch` can delete such a branch, the line at the end tells you.
 
 In a pipe, trim writes one branch on each line, with a tab between the fields. The fields are the repository, the branch, the result and the age of the last commit. With `--delete`, trim writes one line for each deleted branch, a line for each switch made by `--switch`, and a message on stderr for each checked-out branch that it did not delete. Use the pipe format in scripts.
 

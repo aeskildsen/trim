@@ -88,6 +88,9 @@ struct Kept {
     found: Found,
     /// Why `--switch` did not switch away from the branch.
     why: Option<String>,
+    /// True if the branch is checked out in the worktree at the path, so
+    /// that `--switch` can switch away from it.
+    here: bool,
 }
 
 #[derive(Default)]
@@ -343,12 +346,9 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
         } else if c.remote {
             to_delete_on_remote.push((c.remote_name().to_owned(), c.tip, found));
         } else if checked_out.contains(&c.name) {
-            let why = if head.as_ref() == Some(&c.name) {
-                switch_refused.clone()
-            } else {
-                None
-            };
-            result.kept.push(Kept { found, why });
+            let here = head.as_ref() == Some(&c.name);
+            let why = if here { switch_refused.clone() } else { None };
+            result.kept.push(Kept { found, why, here });
         } else {
             // The delete fails if the branch moved after trim read it.
             repo.find_reference(format!("refs/heads/{}", c.name).as_str())?
