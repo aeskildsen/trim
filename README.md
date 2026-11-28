@@ -136,7 +136,6 @@ A commit-graph makes trim faster. git writes a commit-graph during maintenance. 
 The Nix dev shell supplies all tools. Run each command in it:
 
 ```sh
-nix develop -c just check     # the tests, fast
 nix develop -c just test      # the tests
 nix develop -c just lint      # rustfmt and clippy
 nix develop -c just build     # release build into target/release/

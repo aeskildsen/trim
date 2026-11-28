@@ -8,6 +8,14 @@ All important changes to trim are in this file. The format is from [Keep a Chang
 
 - `--switch` with `--delete`: if the branch of the worktree is stale, trim switches to the base branch and then deletes the stale branch. trim does not switch a worktree with changes that are not committed, or with a merge, rebase or other operation in progress.
 
+### Changed
+
+- Wording about contributing - AI contributions don't need attribution.
+
+### Removed
+
+- The `just check` recipe. The tests are fast, so just use `just test`.
+
 ## [0.1.0] - 2026-11-28
 
 The first release.

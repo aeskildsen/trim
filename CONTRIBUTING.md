@@ -21,9 +21,7 @@ nix develop -c just lint
 You can use AI tools for code, documentation and GitHub communication. A person must examine and understand each contribution before it is sent. That person is responsible for the contribution.
 
 - A contribution with AI help must meet the same project standards as other contributions.
-- Before you send material from an AI tool, make sure that it obeys its licence and attribution requirements.
 - AI tools can help with reviews, but a person makes the final decision.
 - Answer questions about your contribution yourself. Do not send messages between reviewers and AI tools.
 - Do not put an AI identity in a `Signed-off-by` or `Co-authored-by` trailer. `Signed-off-by` is for a person who makes the stated certification.
-- You can tell about important AI help with an `Assisted-by:` trailer, for example `Assisted-by: tool:model`.
 - You do not have to tell about tools for grammar, spelling or clear language.
