@@ -1,8 +1,12 @@
 # trim
 
-trim finds local git branches whose changes are already on the default branch. It finds a branch after a merge, a rebase or a squash merge. With `--delete`, it deletes these branches.
+> Note: Alpha-stage software
 
-`git branch --merged` finds only true merges. When a forge squash-merges a pull request, the branch stays in its list. trim finds that branch too.
+trim finds local git branches whose changes are already on the default branch. It finds a branch after a merge, a rebase, or a squash merge. With `--delete`, it deletes these branches.
+
+`git branch --merged` finds only true merges. When a forge squash-merges a pull request, the branch stays in its list. trim finds that remote branch too.
+
+Note that trim does *not* check whether changes made in the branches it finds survive unchanged in later commits.
 
 ```console
 $ trim ~/src
@@ -26,13 +30,11 @@ Deleted 1 branch.
 
 ## Install
 
+trim is pure Rust. You need only a Rust toolchain, version 1.95 or later.
+
 ```sh
 cargo install --locked --git https://github.com/aeskildsen/trim
 ```
-
-trim is pure Rust. You need only a Rust toolchain, version 1.95 or later.
-The `--locked` flag makes Cargo use the dependency versions in `Cargo.lock`,
-which are the versions that the tests use.
 
 With Nix, use this command:
 
@@ -40,12 +42,7 @@ With Nix, use this command:
 nix profile install github:aeskildsen/trim
 ```
 
-These commands install the latest version on `main`. To install a release, add its tag:
-
-```sh
-cargo install --locked --git https://github.com/aeskildsen/trim --tag v0.1.0
-nix profile install github:aeskildsen/trim/v0.1.0
-```
+Raise an issue if you would like prebuilt binaries for trim.
 
 `trim --version` shows the installed version. [CHANGELOG.md](CHANGELOG.md) lists the changes in each release.
 
