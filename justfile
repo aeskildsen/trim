@@ -9,10 +9,6 @@ import 'just/loader.just'
 default:
     @just --list
 
-# Fast check: the tests
-check:
-    cargo test --quiet
-
 # Create a local release tag with just release x.y.z
 release $VERSION:
     #!/usr/bin/env bash
