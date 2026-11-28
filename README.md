@@ -40,6 +40,15 @@ With Nix, use this command:
 nix profile install github:aeskildsen/trim
 ```
 
+These commands install the latest version on `main`. To install a release, add its tag:
+
+```sh
+cargo install --locked --git https://github.com/aeskildsen/trim --tag v0.1.0
+nix profile install github:aeskildsen/trim/v0.1.0
+```
+
+`trim --version` shows the installed version. [CHANGELOG.md](CHANGELOG.md) lists the changes in each release.
+
 ## Use
 
 ```
@@ -121,6 +130,15 @@ nix build                     # Nix package into result/bin/trim
 ```
 
 To let rustfmt correct the formatting, use `just lint correct`.
+
+### Release
+
+trim uses [Semantic Versioning](https://semver.org/). `Cargo.toml` holds the version, and each release has a tag `v<version>`. There are no releases on crates.io and no prebuilt binaries.
+
+1. In a pull request, set the new version in `Cargo.toml`, run `cargo check` to update `Cargo.lock`, and move the `Unreleased` items in `CHANGELOG.md` to a section for the new version.
+2. Merge the pull request, then update the local `main`.
+3. Run `nix develop -c just release <version>`. The recipe makes the tag only if `Cargo.toml`, `Cargo.lock` and `CHANGELOG.md` agree with the version.
+4. Push the tag with `git push origin v<version>`.
 
 ### Benchmark
 
