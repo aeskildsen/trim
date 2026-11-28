@@ -2,9 +2,10 @@
 //! branch, also after a rebase or squash merge. With `--delete`, remove them.
 
 mod detect;
+mod output;
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use detect::{Detector, How};
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
@@ -17,6 +18,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The only remote that trim reads and changes.
 const REMOTE: &str = "origin";
+
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum ColorWhen {
+    /// Colour on a terminal, if the NO_COLOR variable is not set.
+    Auto,
+    /// Always colour, and always use the layout for a terminal.
+    Always,
+    /// Never colour.
+    Never,
+}
 
 /// List local git branches that are already merged into the default branch,
 /// also by rebase or squash merge.
@@ -49,22 +60,32 @@ struct Cli {
     /// How many directory levels below each PATH to search for repositories.
     #[arg(long, default_value_t = 2)]
     depth: usize,
+
+    /// When to colour the output.
+    #[arg(long, alias = "colour", value_name = "WHEN", default_value = "auto")]
+    color: ColorWhen,
 }
 
 struct Found {
-    repo: String,
     branch: String,
     how: How,
     time: i64,
 }
 
+struct Deleted {
+    found: Found,
+    /// The abbreviated last commit, to restore the branch.
+    tip: String,
+}
+
 #[derive(Default)]
 struct RepoResult {
     found: Vec<Found>,
-    /// Lines for stdout about deleted branches.
-    deleted: Vec<String>,
-    /// Lines for stderr: errors and branches that were not deleted.
-    notes: Vec<String>,
+    deleted: Vec<Deleted>,
+    /// Stale branches that stay because they are checked out.
+    kept: Vec<Found>,
+    /// Lines for stderr.
+    errors: Vec<String>,
     failed: bool,
 }
 
@@ -80,39 +101,72 @@ fn main() -> ExitCode {
         find_repos(path, cli.depth, &mut repos);
     }
 
-    let mut results: Vec<(String, RepoResult)> = repos
+    let mut results: Vec<(PathBuf, RepoResult)> = repos
         .par_iter()
         .map(|path| {
             let name = path.display().to_string();
             let result = scan(path, &name, &cli).unwrap_or_else(|e| RepoResult {
-                notes: vec![format!("trim: {name}: {e:#}")],
+                errors: vec![format!("trim: {name}: {e:#}")],
                 failed: true,
                 ..Default::default()
             });
-            (name, result)
+            (path.clone(), result)
         })
         .collect();
     results.sort_by(|a, b| a.0.cmp(&b.0));
 
+    let stdout = std::io::stdout();
+    let terminal = stdout.is_terminal();
+    let for_person = terminal || cli.color == ColorWhen::Always;
+    let painter = output::Painter {
+        colour: match cli.color {
+            ColorWhen::Always => true,
+            ColorWhen::Never => false,
+            ColorWhen::Auto => {
+                terminal && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
+            }
+        },
+    };
+
     let mut failed = false;
-    for (_, r) in &results {
-        for note in &r.notes {
-            eprintln!("{note}");
+    for (path, r) in &results {
+        for error in &r.errors {
+            eprintln!("{error}");
+        }
+        // The output for a person shows these in the group of the repository.
+        if !for_person {
+            for f in &r.kept {
+                eprintln!(
+                    "trim: {}: {} is {}, but it is checked out; not deleted",
+                    path.display(),
+                    f.branch,
+                    f.how.as_str()
+                );
+            }
         }
         failed |= r.failed;
     }
 
-    let stdout = std::io::stdout();
-    let aligned = stdout.is_terminal();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
     let mut out = stdout.lock();
-    let written = if cli.delete {
-        results
-            .iter()
-            .flat_map(|(_, r)| &r.deleted)
-            .try_for_each(|line| writeln!(out, "{line}"))
-    } else {
-        let found: Vec<&Found> = results.iter().flat_map(|(_, r)| &r.found).collect();
-        print_table(&mut out, &found, aligned)
+    let written = match (for_person, cli.delete) {
+        (true, false) => output::list(&mut out, &painter, &results, now),
+        (true, true) => output::deleted(&mut out, &painter, &results),
+        (false, false) => print_tsv(&mut out, &results, now),
+        (false, true) => results.iter().try_for_each(|(path, r)| {
+            r.deleted.iter().try_for_each(|d| {
+                writeln!(
+                    out,
+                    "Deleted {} in {} ({}, was {})",
+                    d.found.branch,
+                    path.display(),
+                    d.found.how.as_str(),
+                    d.tip
+                )
+            })
+        }),
     };
     // A closed pipe (for example `trim | head`) is not an error.
     if let Err(e) = written
@@ -236,36 +290,28 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
     let mut to_delete_on_remote = Vec::new();
     for (c, how) in candidates.into_iter().zip(classified) {
         let Some(how) = how else { continue };
-        let short = c.tip.to_string()[..10].to_owned();
-
-        if cli.delete {
-            if c.remote {
-                to_delete_on_remote.push((c.remote_name().to_owned(), c.tip, how));
-            } else if checked_out.contains(&c.name) {
-                result.notes.push(format!(
-                    "trim: {name}: {} is {}, but it is checked out; not deleted",
-                    c.name,
-                    how.as_str()
-                ));
-            } else {
-                // The delete fails if the branch moved after trim read it.
-                repo.find_reference(format!("refs/heads/{}", c.name).as_str())?
-                    .delete()
-                    .with_context(|| format!("cannot delete {}", c.name))?;
-                // The tip lets the user restore the branch: git branch <name> <tip>
-                result.deleted.push(format!(
-                    "Deleted {} in {name} ({}, was {short})",
-                    c.name,
-                    how.as_str()
-                ));
-            }
-        }
-        result.found.push(Found {
-            repo: name.to_owned(),
+        let found = Found {
             time: repo.find_commit(c.tip)?.time()?.seconds,
-            branch: c.name,
+            branch: c.name.clone(),
             how,
-        });
+        };
+        if !cli.delete {
+            result.found.push(found);
+        } else if c.remote {
+            to_delete_on_remote.push((c.remote_name().to_owned(), c.tip, found));
+        } else if checked_out.contains(&c.name) {
+            result.kept.push(found);
+        } else {
+            // The delete fails if the branch moved after trim read it.
+            repo.find_reference(format!("refs/heads/{}", c.name).as_str())?
+                .delete()
+                .with_context(|| format!("cannot delete {}", c.name))?;
+            // The tip lets the user restore the branch: git branch <name> <tip>
+            result.deleted.push(Deleted {
+                found,
+                tip: short_id(c.tip),
+            });
+        }
     }
 
     if !to_delete_on_remote.is_empty() {
@@ -274,21 +320,20 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
             .map(|(b, tip, _)| (b.clone(), *tip))
             .collect();
         let outcome = delete_on_remote(path, &refs)?;
-        for (branch, tip, how) in to_delete_on_remote {
+        for (branch, tip, found) in to_delete_on_remote {
             match outcome.get(&branch) {
-                Some(Ok(())) => result.deleted.push(format!(
-                    "Deleted {REMOTE}/{branch} in {name} ({}, was {})",
-                    how.as_str(),
-                    &tip.to_string()[..10]
-                )),
+                Some(Ok(())) => result.deleted.push(Deleted {
+                    found,
+                    tip: short_id(tip),
+                }),
                 Some(Err(why)) => {
-                    result.notes.push(format!(
+                    result.errors.push(format!(
                         "trim: {name}: {REMOTE}/{branch} not deleted: {why}"
                     ));
                     result.failed = true;
                 }
                 None => {
-                    result.notes.push(format!(
+                    result.errors.push(format!(
                         "trim: {name}: {REMOTE}/{branch}: no result from git push"
                     ));
                     result.failed = true;
@@ -297,6 +342,10 @@ fn scan(path: &Path, name: &str, cli: &Cli) -> Result<RepoResult> {
         }
     }
     Ok(result)
+}
+
+fn short_id(id: ObjectId) -> String {
+    id.to_string()[..10].to_owned()
 }
 
 /// Deletes branches on the remote with one `git push`. The git CLI does the
@@ -467,46 +516,24 @@ fn checked_out_branches(repo: &gix::Repository) -> Result<HashSet<String>> {
     Ok(names)
 }
 
-/// Aligned columns on a terminal; tab-separated fields in a pipe.
-fn print_table(out: &mut impl Write, rows: &[&Found], aligned: bool) -> std::io::Result<()> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
-    let cells: Vec<[String; 4]> = rows
-        .iter()
-        .map(|f| {
-            [
-                f.repo.clone(),
-                f.branch.clone(),
-                f.how.as_str().to_owned(),
-                age(now - f.time),
-            ]
-        })
-        .collect();
-    if !aligned {
-        for c in &cells {
-            writeln!(out, "{}", c.join("\t"))?;
+/// One branch on each line, with tabs between the fields: repository,
+/// branch, result and age.
+fn print_tsv(
+    out: &mut impl Write,
+    results: &[(PathBuf, RepoResult)],
+    now: i64,
+) -> std::io::Result<()> {
+    for (path, r) in results {
+        for f in &r.found {
+            writeln!(
+                out,
+                "{}\t{}\t{}\t{}",
+                path.display(),
+                f.branch,
+                f.how.as_str(),
+                age(now - f.time)
+            )?;
         }
-        return Ok(());
-    }
-    let mut width = [0; 3];
-    for c in &cells {
-        for (w, cell) in width.iter_mut().zip(c) {
-            *w = (*w).max(cell.chars().count());
-        }
-    }
-    for c in &cells {
-        writeln!(
-            out,
-            "{:w0$}  {:w1$}  {:w2$}  {}",
-            c[0],
-            c[1],
-            c[2],
-            c[3],
-            w0 = width[0],
-            w1 = width[1],
-            w2 = width[2]
-        )?;
     }
     Ok(())
 }

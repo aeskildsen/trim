@@ -6,21 +6,33 @@ trim finds local git branches whose changes are already on the default branch. I
 
 ```console
 $ trim ~/src
-~/src/site     redesign        squashed  6 weeks ago
-~/src/engine   fix-release     rebased   9 days ago
-~/src/notes    add-index       merged    2 months ago
+engine  ~/src/engine
+  fix-release  rebased   9 days ago
+
+notes  ~/src/notes
+  add-index  merged  2 months ago
+
+site  ~/src/site
+  redesign  squashed  6 weeks ago
+
+3 stale branches in 3 of 8 repositories. Run with --delete to remove them.
 
 $ trim --delete ~/src/site
-Deleted redesign in ~/src/site (squashed, was 3f9c2a1b7e)
+site  ~/src/site
+  deleted  redesign  squashed  was 3f9c2a1b7e
+
+Deleted 1 branch.
 ```
 
 ## Install
 
 ```sh
-cargo install --git https://github.com/aeskildsen/trim
+cargo install --locked --git https://github.com/aeskildsen/trim
 ```
 
-trim is pure Rust. You need only a Rust toolchain.
+trim is pure Rust. You need only a Rust toolchain, version 1.95 or later.
+The `--locked` flag makes Cargo use the dependency versions in `Cargo.lock`,
+which are the versions that the tests use.
 
 With Nix, use this command:
 
@@ -44,6 +56,7 @@ trim reads only the local refs. Run `git fetch` before trim to get the latest st
 | `-r`, `--remotes` | Also check the branches of the remote `origin`. With `--delete`, delete them on the remote. |
 | `-b`, `--base <BRANCH>` | Compare with this branch, not with the default branch. |
 | `--depth <N>` | Search for repositories to this number of directory levels. The default is 2. |
+| `--color <WHEN>` | `auto`, `always` or `never`. The default is `auto`. |
 
 ### The default branch
 
@@ -53,7 +66,11 @@ A branch is stale if the local default branch contains its changes. It is also s
 
 ### Output
 
-On a terminal, trim aligns the columns. In a pipe, trim writes one branch on each line, with a tab between the fields. The fields are the repository, the branch, the result and the age of the last commit.
+On a terminal, trim shows the branches in groups by repository. Each group has a heading with the name and the path of the repository. A line at the end gives the totals. With `--delete`, a group also shows each checked-out branch that trim did not delete.
+
+In a pipe, trim writes one branch on each line, with a tab between the fields. The fields are the repository, the branch, the result and the age of the last commit. With `--delete`, trim writes one line for each deleted branch, and a message on stderr for each checked-out branch that it did not delete. Use the pipe format in scripts.
+
+On a terminal, trim uses colour. `--color never` or the `NO_COLOR` environment variable turns the colour off. `--color always` uses colour and the terminal layout also in a pipe, for example `trim --color always | less -R`.
 
 Errors go to stderr. The exit status is 0 if all checks and deletions are successful. It is 1 if an error occurs, and 2 if a path is not a directory.
 

@@ -2,6 +2,7 @@
 name = "trim"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
 description = "Find and delete git branches that are already merged, also by squash or rebase"
 license = "MIT"
 repository = "https://github.com/aeskildsen/trim"
@@ -11,6 +12,7 @@ categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow = "1.0.105"
+anstyle = "1.0.14"
 clap = { version = "4.6.10", features = ["derive"] }
 gix = { version = "0.91.0", default-features = false, features = ["sha1", "revision", "blob-diff", "max-performance"] }
 rayon = "1.12.0"
