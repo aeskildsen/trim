@@ -11,6 +11,7 @@ const BOLD: Style = Style::new().bold();
 const DIM: Style = Style::new().dimmed();
 const DELETED: Style = AnsiColor::Red.on_default();
 const KEPT: Style = AnsiColor::Yellow.on_default();
+const SWITCHED: Style = AnsiColor::Blue.on_default();
 
 /// Writes text with styles, or without styles if colour is off.
 pub struct Painter {
@@ -142,12 +143,20 @@ pub fn deleted(
     let mut repos_with_deleted = 0;
     for (path, r) in results
         .iter()
-        .filter(|(_, r)| !r.deleted.is_empty() || !r.kept.is_empty())
+        .filter(|(_, r)| !r.deleted.is_empty() || !r.kept.is_empty() || r.switched.is_some())
     {
-        let all = || r.deleted.iter().map(|d| &d.found).chain(&r.kept);
+        let all = || {
+            r.deleted
+                .iter()
+                .map(|d| &d.found)
+                .chain(r.kept.iter().map(|k| &k.found))
+        };
         let wb = width(all().map(|f| f.branch.as_str()));
         let wh = width(all().map(|f| f.how.as_str()));
         writeln!(out, "{}", p.heading(path))?;
+        if let Some(to) = &r.switched {
+            writeln!(out, "  {} to {to}", p.paint(SWITCHED, "switched"))?;
+        }
         for d in &r.deleted {
             writeln!(
                 out,
@@ -158,14 +167,18 @@ pub fn deleted(
                 p.paint(DIM, &format!("was {}", d.tip))
             )?;
         }
-        for f in &r.kept {
+        for k in &r.kept {
+            let note = match &k.why {
+                Some(why) => format!("checked out; not switched: {why}"),
+                None => "checked out".to_owned(),
+            };
             writeln!(
                 out,
                 "  {}  {}  {}  {}",
                 p.paint(KEPT, "kept   "),
-                p.branch(&f.branch, wb),
-                p.how(f.how, wh),
-                p.paint(DIM, "checked out")
+                p.branch(&k.found.branch, wb),
+                p.how(k.found.how, wh),
+                p.paint(DIM, &note)
             )?;
         }
         writeln!(out)?;

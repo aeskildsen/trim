@@ -62,6 +62,7 @@ trim reads only the local refs. Run `git fetch` before trim to get the latest st
 | Option | Function |
 |---|---|
 | `-d`, `--delete` | Delete the branches that trim finds. trim does not delete a branch that is checked out in a worktree. |
+| `-s`, `--switch` | With `--delete`: if the branch of the worktree at the path is stale, switch to the base branch first, then delete the stale branch. See [Switch away from a stale branch](#switch-away-from-a-stale-branch). |
 | `-r`, `--remotes` | Also check the branches of the remote `origin`. With `--delete`, delete them on the remote. |
 | `-b`, `--base <BRANCH>` | Compare with this branch, not with the default branch. |
 | `--depth <N>` | Search for repositories to this number of directory levels. The default is 2. |
@@ -77,7 +78,7 @@ A branch is stale if the local default branch contains its changes. It is also s
 
 On a terminal, trim shows the branches in groups by repository. Each group has a heading with the name and the path of the repository. A line at the end gives the totals. With `--delete`, a group also shows each checked-out branch that trim did not delete.
 
-In a pipe, trim writes one branch on each line, with a tab between the fields. The fields are the repository, the branch, the result and the age of the last commit. With `--delete`, trim writes one line for each deleted branch, and a message on stderr for each checked-out branch that it did not delete. Use the pipe format in scripts.
+In a pipe, trim writes one branch on each line, with a tab between the fields. The fields are the repository, the branch, the result and the age of the last commit. With `--delete`, trim writes one line for each deleted branch, a line for each switch made by `--switch`, and a message on stderr for each checked-out branch that it did not delete. Use the pipe format in scripts.
 
 On a terminal, trim uses colour. `--color never` or the `NO_COLOR` environment variable turns the colour off. `--color always` uses colour and the terminal layout also in a pipe, for example `trim --color always | less -R`.
 
@@ -85,9 +86,22 @@ Errors go to stderr. The exit status is 0 if all checks and deletions are succes
 
 ### Delete on the remote
 
-`--remotes --delete` deletes the branches on the remote with `git push`. Your SSH and credential configuration apply. For this function only, trim needs the `git` command.
+`--remotes --delete` deletes the branches on the remote with `git push`. Your SSH and credential configuration apply. For this function and for `--switch`, trim needs the `git` command.
 
 Each deletion has a lease on the commit that trim checked. If a person pushed to the branch after your last fetch, the remote does not delete the branch. trim then shows an error.
+
+### Switch away from a stale branch
+
+Without `--switch`, trim does not delete a stale branch that is checked out. With `--delete --switch`, trim does `git switch` to the base branch in the worktree at the path, and then deletes the stale branch. The base branch is the local default branch, or the branch of `--base`. trim does not pull the base branch.
+
+trim does not switch, and keeps the branch, in these conditions:
+
+- The worktree has changes that are not committed, staged or not staged. `git switch` would move them to the base branch. Untracked files do not stop the switch, because `git switch` stops by itself if a file would be overwritten.
+- A merge, rebase, cherry-pick, revert, bisect or `git am` is in progress.
+- The base branch is not a local branch.
+- `git switch` fails, for example because the base branch is checked out in a different worktree.
+
+The output tells the reason. trim does not switch a linked worktree of the repository at the path. A stale branch that is checked out in a linked worktree stays.
 
 ### Restore a branch
 
