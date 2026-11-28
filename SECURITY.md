@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-trim has no releases. Only the latest version on `main` gets security fixes.
+Only the latest release and `main` get security fixes. A fix comes in a new patch release. [CHANGELOG.md](CHANGELOG.md) lists the releases.
 
 ## Report a vulnerability
 
